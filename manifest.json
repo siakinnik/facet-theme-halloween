@@ -1,0 +1,9 @@
+{
+  "id": "theme-halloween",
+  "name": { "en": "Halloween theme", "ru": "Тема «Хэллоуин»" },
+  "version": "0.1.0-alpha",
+  "api": 3,
+  "themes": [
+    { "id": "halloween", "name": { "en": "Halloween", "ru": "Хэллоуин" }, "file": "halloween.json" }
+  ]
+}

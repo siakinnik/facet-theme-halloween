@@ -1,0 +1,90 @@
+name: Release
+
+# Run from the Actions tab ("Run workflow"): tags the current commit with the
+# version from CMakeLists.txt, builds the theme and publishes a GitHub release.
+# Pushing a matching tag by hand works too.
+on:
+  workflow_dispatch:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+jobs:
+  release:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Check translations
+        run: python3 scripts/check_i18n.py
+
+      - name: Determine version and tag
+        id: version
+        run: |
+          version="$(bash scripts/version.sh)"
+          tag="v$version"
+          if [[ "$GITHUB_REF_TYPE" == tag ]]; then
+            if [[ "$GITHUB_REF_NAME" != "$tag" ]]; then
+              echo "::error::Tag $GITHUB_REF_NAME does not match version $version in CMakeLists.txt"
+              exit 1
+            fi
+          else
+            if git rev-parse -q --verify "refs/tags/$tag" >/dev/null; then
+              echo "::error::Tag $tag already exists. Bump the version in CMakeLists.txt and manifest.json first."
+              exit 1
+            fi
+            git config user.name "github-actions[bot]"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            git tag -a "$tag" -m "theme-halloween $version"
+            git push origin "$tag"
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          if [[ "$version" == *-* ]]; then echo "prerelease=true"; else echo "prerelease=false"; fi >> "$GITHUB_OUTPUT"
+
+      - name: Install toolchain
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends cmake ninja-build g++
+
+      - name: Build
+        run: |
+          cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
+          cmake --build build
+          python3 scripts/ci/check-theme.py build/theme-halloween.plugin/halloween.json
+
+      # The module is only data: the same archive for every architecture.
+      - name: Pack
+        run: bash scripts/ci/package.sh build/theme-halloween.plugin "${{ steps.version.outputs.version }}" dist x86_64 aarch64 armv7
+
+      - name: Checksums
+        run: cd dist && sha256sum *.tar.gz > SHA256SUMS && cat SHA256SUMS
+
+      - name: Publish release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.version.outputs.tag }}
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          cat > notes.md <<EOT
+          The Halloween theme for Facet 0.8 or later: pumpkins, bats, a moon, glowing tiles. Moving parts follow
+          Settings > Theme animation. Install on a device:
+
+          \`\`\`bash
+          curl -fsSL https://raw.githubusercontent.com/siakinnik/facet-core/main/scripts/get.sh | sudo bash -s -- --plugin ${GITHUB_REPOSITORY} --version ${TAG}
+          \`\`\`
+
+          Then pick it in Settings > Theme.
+          EOT
+          flags=()
+          [[ "${{ steps.version.outputs.prerelease }}" == true ]] && flags+=(--prerelease)
+          gh release create "$TAG" dist/* --repo "$GITHUB_REPOSITORY" --verify-tag \
+            --title "theme-halloween $VERSION" --notes-file notes.md --generate-notes "${flags[@]}"
